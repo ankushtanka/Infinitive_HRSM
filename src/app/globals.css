@@ -1,0 +1,267 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* HRMS Light Orange Design System Tokens */
+  --primary: #F97316;
+  --primary-hover: #EA580C;
+  --primary-pressed: #C2410C;
+  --primary-light: #FFEDD5;
+  --primary-pale: #FFF7ED;
+  --primary-pale-border: #FED7AA;
+  --chart-light: #FDBA74;
+  --page-bg: #FFFBF7;
+  --card-bg: #FFFFFF;
+  --text-primary: #0F172A;
+  --text-secondary: #64748B;
+  --nav-inactive: #7C2D12;
+  --nav-active: #9A3412;
+  --on-primary: #0B1220;
+  --border: #F0E4D6;
+  --divider: #F7EFE5;
+
+  /* Spacing Tokens */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* Radii */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+}
+
+@layer base {
+  html, body {
+    height: 100%;
+    width: 100%;
+    min-height: 100%;
+    background-color: #f8fafc;
+  }
+
+  body {
+    @apply bg-slate-50 text-slate-800 font-sans antialiased selection:bg-indigo-500 selection:text-white;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply tracking-tight text-slate-900 font-semibold;
+  }
+}
+
+/* Custom Webkit Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Warm HRMS Scrollbars */
+.hrms-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.hrms-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.hrms-scrollbar::-webkit-scrollbar-thumb {
+  background: #FED7AA;
+  border-radius: 9999px;
+}
+.hrms-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #FDBA74;
+}
+
+/* Micro-animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.skeleton-shimmer {
+  background: linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+/* Global Application Scroll Lock Rules for Overlays & Modals */
+html[data-scroll-locked='true'],
+body.ems-scroll-locked {
+  overflow: hidden !important;
+  height: 100% !important;
+  width: 100% !important;
+  background-color: #f8fafc !important;
+}
+
+html[data-scroll-locked='true'] main,
+body.ems-scroll-locked main,
+html[data-scroll-locked='true'] aside,
+body.ems-scroll-locked aside,
+html[data-scroll-locked='true'] [data-scroll-container],
+body.ems-scroll-locked [data-scroll-container] {
+  overflow: hidden !important;
+}
+
+/* Allow smooth touch-scrolling inside modals while preventing scroll chaining to background */
+html[data-scroll-locked='true'] [role='dialog'],
+body.ems-scroll-locked [role='dialog'],
+html[data-scroll-locked='true'] .modal-scroll-area,
+body.ems-scroll-locked .modal-scroll-area,
+html[data-scroll-locked='true'] [role='dialog'] .overflow-y-auto,
+body.ems-scroll-locked [role='dialog'] .overflow-y-auto,
+[data-scroll-locked='true'] .overflow-y-auto {
+  overscroll-behavior: contain !important;
+  -webkit-overflow-scrolling: touch;
+}
+
+
+/* ==========================================================================
+   ADMIN LIGHT ORANGE THEME RULES (Scoped exclusively to .admin-theme)
+   ========================================================================== */
+
+/* Workspace background */
+.admin-theme {
+  background-color: var(--page-bg);
+  color: var(--text-primary);
+}
+
+/* Base Card Styling in Admin Panel */
+.admin-theme .rounded-2xl {
+  border-radius: var(--radius-lg);
+}
+
+/* Card Borders & Elevation */
+.admin-theme div[class*="bg-white"][class*="border"] {
+  border-color: var(--border);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+}
+
+/* Table Headings & Backgrounds */
+.admin-theme thead,
+.admin-theme thead th,
+.admin-theme tr[class*="bg-slate-50"] th {
+  background-color: var(--primary-pale) !important;
+  color: var(--text-secondary) !important;
+  border-bottom-color: var(--primary-pale-border) !important;
+}
+
+/* Table Rows & Hover */
+.admin-theme tbody tr {
+  border-bottom-color: var(--divider) !important;
+}
+.admin-theme tbody tr:hover {
+  background-color: var(--primary-pale) !important;
+}
+
+/* Primary Action Buttons in Admin Panel */
+.admin-theme button[class*="bg-indigo-600"],
+.admin-theme a[class*="bg-indigo-600"],
+.admin-theme button[class*="bg-blue-600"],
+.admin-theme a[class*="bg-blue-600"],
+.admin-theme button[class*="bg-purple-600"],
+.admin-theme a[class*="bg-purple-600"] {
+  background-color: var(--primary) !important;
+  color: var(--on-primary) !important;
+  font-weight: 600 !important;
+  border-color: transparent !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05) !important;
+}
+
+.admin-theme button[class*="bg-indigo-600"]:hover,
+.admin-theme a[class*="bg-indigo-600"]:hover,
+.admin-theme button[class*="bg-blue-600"]:hover,
+.admin-theme a[class*="bg-blue-600"]:hover,
+.admin-theme button[class*="bg-purple-600"]:hover,
+.admin-theme a[class*="bg-purple-600"]:hover {
+  background-color: var(--primary-hover) !important;
+}
+
+.admin-theme button[class*="bg-indigo-600"]:active,
+.admin-theme a[class*="bg-indigo-600"]:active,
+.admin-theme button[class*="bg-blue-600"]:active,
+.admin-theme a[class*="bg-blue-600"]:active {
+  background-color: var(--primary-pressed) !important;
+}
+
+/* Secondary & Outline Buttons */
+.admin-theme button[class*="border-slate-200"]:hover,
+.admin-theme a[class*="border-slate-200"]:hover {
+  background-color: var(--primary-pale) !important;
+  border-color: var(--primary-pale-border) !important;
+  color: var(--text-primary) !important;
+}
+
+/* Active Tabs in Admin Panel */
+.admin-theme [class*="border-indigo-600"],
+.admin-theme [class*="border-blue-600"] {
+  border-color: var(--primary) !important;
+  color: var(--primary-pressed) !important;
+}
+
+/* Text Links */
+.admin-theme a[class*="text-indigo-600"],
+.admin-theme button[class*="text-indigo-600"],
+.admin-theme a[class*="text-blue-600"],
+.admin-theme button[class*="text-blue-600"] {
+  color: var(--primary-hover) !important;
+}
+.admin-theme a[class*="text-indigo-600"]:hover,
+.admin-theme button[class*="text-indigo-600"]:hover,
+.admin-theme a[class*="text-blue-600"]:hover,
+.admin-theme button[class*="text-blue-600"]:hover {
+  color: var(--primary-pressed) !important;
+}
+
+/* Focus Rings on Inputs */
+.admin-theme input:focus,
+.admin-theme select:focus,
+.admin-theme textarea:focus {
+  border-color: var(--primary) !important;
+  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.2) !important;
+  outline: none !important;
+}
+
+/* Filter / Highlight Chips */
+.admin-theme [class*="bg-indigo-50"],
+.admin-theme [class*="bg-blue-50"] {
+  background-color: var(--primary-pale) !important;
+  color: var(--nav-inactive) !important;
+  border-color: var(--primary-pale-border) !important;
+}
+
+/* Tabular Numerals on all Numeric and Currency displays */
+.admin-theme [class*="font-extrabold"],
+.admin-theme [class*="font-bold"],
+.admin-theme td,
+.admin-theme th {
+  font-variant-numeric: tabular-nums;
+}
