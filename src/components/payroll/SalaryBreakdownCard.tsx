@@ -118,8 +118,8 @@ export const SalaryBreakdownCard: React.FC<SalaryBreakdownCardProps> = ({
           panNumber: panNumber.trim(),
           pfNo: pfNo.trim(),
           pfUan: pfUan.trim(),
-          effectiveFrom: new Date().toISOString().split('T')[0],
-        }),
+          effectiveFrom: '2026-01-01',
+                }),
       });
 
       const data = await res.json();

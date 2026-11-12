@@ -40,7 +40,7 @@ export const AssignSalaryModal: React.FC<AssignSalaryModalProps> = ({
   const [pfEnabled, setPfEnabled] = useState<boolean>(true);
   const [ptEnabled, setPtEnabled] = useState<boolean>(true);
   const [tdsPercent, setTdsPercent] = useState<number>(0);
-  const [effectiveDate, setEffectiveDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [effectiveDate, setEffectiveDate] = useState<string>('2026-01-01');
   const [changeReason, setChangeReason] = useState<string>('Standard Salary Assignment (50% Basic, 30% HRA, ₹2,353 Conveyance)');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -66,7 +66,7 @@ export const AssignSalaryModal: React.FC<AssignSalaryModalProps> = ({
       setPfEnabled(editingAssignment.pfEnabled);
       setPtEnabled(editingAssignment.ptEnabled);
       setTdsPercent(editingAssignment.tdsPercent || 10);
-      setEffectiveDate(editingAssignment.effectiveDate || new Date().toISOString().split('T')[0]);
+      setEffectiveDate(editingAssignment.effectiveDate || '2026-01-01');
       setChangeReason(editingAssignment.revisionReason || 'Salary structure updated');
     } else if (selectedEmployee) {
       setEmployeeId(selectedEmployee.employeeId || selectedEmployee.id || (selectedEmployee as any)._id || '');

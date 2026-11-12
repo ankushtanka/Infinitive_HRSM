@@ -30,9 +30,7 @@ function numberToWordsINR(num: number): string {
 // Mask sensitive identifiers
 function maskBankAccount(acc?: string): string {
   if (!acc || typeof acc !== 'string' || acc.trim() === '' || acc.trim().toUpperCase() === 'N/A') return 'N/A';
-  const clean = acc.trim();
-  if (clean.length <= 4) return '••••' + clean;
-  return '••••••••' + clean.slice(-4);
+  return acc.trim();   // poora account number dikhao, mask nahi
 }
 
 function maskPAN(pan?: string): string {
