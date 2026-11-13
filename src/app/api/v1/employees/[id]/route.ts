@@ -192,8 +192,12 @@ async function updateEmployeeHandler(req: NextRequest, { params }: { params: { i
       updateDoc.salary = numSalary;
     }
 
-    if (body.panNumber !== undefined && body.panNumber !== null && String(body.panNumber).trim() !== '') {
-      const cleanPan = String(body.panNumber).trim().toUpperCase();
+if (
+  body.panNumber !== undefined &&
+  body.panNumber !== null &&
+  String(body.panNumber).trim() !== '' &&
+  String(body.panNumber).trim().toUpperCase() !== 'N/A'
+) {      const cleanPan = String(body.panNumber).trim().toUpperCase();
       if (!/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(cleanPan)) {
         return NextResponse.json({ success: false, message: 'Invalid PAN number format (e.g. ABCDE1234F).' }, { status: 400 });
       }

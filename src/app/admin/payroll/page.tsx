@@ -117,6 +117,7 @@ export default function PayrollPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [departmentFilter, setDepartmentFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
+  const [monthFilter, setMonthFilter] = useState<string>('ALL');
   const [sortBy, setSortBy] = useState<'name' | 'gross' | 'net' | 'status'>('net');
 
   // Modal States
@@ -161,6 +162,15 @@ export default function PayrollPage() {
   };
 
   const records = liveRecords || state.payrollRecords || [];
+
+  // Months jinki payroll bani hai (newest pehle)
+  const availableMonths = Array.from(
+    new Map(records.map((r: any) => [String(r.payPeriod || ''), String(r.payrollPeriod || '')])).entries()
+  )
+    .filter(([label]) => label)
+    .sort((a, b) => b[1].localeCompare(a[1]))
+    .map(([label]) => label);
+
   const structures = state.salaryStructures || [];
   const rules = state.salaryRules || [];
   const employees = state.employees || [];
@@ -174,7 +184,8 @@ export default function PayrollPage() {
         r.employeeId.toLowerCase().includes(searchTerm.toLowerCase());
       const matchDept = departmentFilter === 'ALL' || r.department === departmentFilter;
       const matchStatus = statusFilter === 'ALL' || r.status === statusFilter;
-      return matchSearch && matchDept && matchStatus;
+      const matchMonth = monthFilter === 'ALL' || r.payPeriod === monthFilter;
+      return matchSearch && matchDept && matchStatus && matchMonth;
     })
     .sort((a, b) => {
       if (sortBy === 'name') return a.employeeName.localeCompare(b.employeeName);
@@ -183,17 +194,18 @@ export default function PayrollPage() {
       return a.status.localeCompare(b.status);
     });
 
-  // Summary Metrics calculations
-  const totalNetDisbursed = records.reduce((acc, r) => acc + (r.netSalary || 0), 0);
-  const totalStatutoryDeductions = records.reduce(
+  // Summary Metrics calculations (selected month ke hisaab se)
+  const summaryRecords = monthFilter === 'ALL' ? records : records.filter((r) => r.payPeriod === monthFilter);
+  const totalNetDisbursed = summaryRecords.reduce((acc, r) => acc + (r.netSalary || 0), 0);
+  const totalStatutoryDeductions = summaryRecords.reduce(
     (acc, r) => acc + (r.pfDeduction || 0) + (r.ptDeduction || 0) + (r.taxDeduction || 0) + (r.esiDeduction || 0),
     0
   );
-  const approvedOrPaidRecords = records.filter(
+  const approvedOrPaidRecords = summaryRecords.filter(
     (r) => r.status === 'Approved' || r.status === 'Processed' || r.status === 'Paid'
   );
   const payslipsGeneratedCount = approvedOrPaidRecords.length;
-  const totalPayrollScopeCount = records.length || employees.length;
+  const totalPayrollScopeCount = summaryRecords.length || employees.length;
 
   // Handlers for Structure CRUD
   const handleSaveStructure = (structData: Omit<SalaryStructure, 'id'>) => {
@@ -468,6 +480,19 @@ export default function PayrollPage() {
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={monthFilter}
+                onChange={(e) => setMonthFilter(e.target.value)}
+                className="rounded-xl border border-slate-200 p-2 bg-slate-50 font-medium text-slate-700"
+              >
+                <option value="ALL">All Months</option>
+                {availableMonths.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+
               <select
                 value={departmentFilter}
                 onChange={(e) => setDepartmentFilter(e.target.value)}

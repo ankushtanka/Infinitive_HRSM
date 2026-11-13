@@ -129,7 +129,8 @@ export default function EmployeesPage() {
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  }, [setEmployees]);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     fetchEmployees();
