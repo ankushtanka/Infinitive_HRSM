@@ -4,6 +4,8 @@ import { getAuthContext, checkPermissions } from '@/lib/auth';
 import { logAuditEvent } from '@/lib/audit';
 import { ObjectId } from 'mongodb';
 import { calculateSalaryBreakdown } from '@/lib/salaryBreakdown';
+import { EMPLOYMENT_TYPES, isInternRecord, normalizeEmploymentType, sanitizeInternship } from '@/lib/employmentType';
+import { isInternRole } from '@/lib/roleUtils';
 
 export const dynamic = 'force-dynamic';
 
@@ -53,14 +55,6 @@ const ALLOWED_STATUSES = [
   'Resigned',
   'Suspended',
   'Former Employee',
-];
-
-const ALLOWED_EMPLOYMENT_TYPES = [
-  'Full-time',
-  'Part-time',
-  'Contract',
-  'Intern',
-  'Temporary',
 ];
 
 async function updateEmployeeHandler(req: NextRequest, { params }: { params: { id: string } }) {
@@ -172,6 +166,29 @@ async function updateEmployeeHandler(req: NextRequest, { params }: { params: { i
       );
     }
 
+    const existingIsIntern = isInternRecord(existing);
+
+    // Mentor / reporting manager chosen from a list must be a real person in the same organization
+    const requestedManagerId = typeof body.managerId === 'string' ? body.managerId.trim() : '';
+    if (requestedManagerId) {
+      const managerRecord = await db.collection('employees').findOne({
+        organizationId: existing.organizationId,
+        employeeId: requestedManagerId,
+      });
+      if (!managerRecord) {
+        return NextResponse.json(
+          { success: false, message: 'The selected reporting manager / mentor does not exist in your organization.' },
+          { status: 400 }
+        );
+      }
+      if (isInternRecord(managerRecord as any)) {
+        return NextResponse.json(
+          { success: false, message: 'An intern cannot be assigned as a reporting manager / mentor.' },
+          { status: 400 }
+        );
+      }
+    }
+
     // Construct explicit update payload from allowlisted fields
     const updateDoc: Record<string, any> = {
       updatedAt: new Date(),
@@ -220,18 +237,51 @@ if (
       updateDoc.ifscCode = cleanIfsc;
     }
 
-    // Employment Type Validation
+    // Employment Type Validation (accepts known spellings such as "Full Time", stores the canonical value)
     if (body.employmentType !== undefined && body.employmentType !== null && body.employmentType !== '') {
-      if (!ALLOWED_EMPLOYMENT_TYPES.includes(body.employmentType)) {
+      const normalizedType = normalizeEmploymentType(body.employmentType);
+      if (!normalizedType) {
         return NextResponse.json(
           {
             success: false,
-            message: `Invalid employment type "${body.employmentType}". Allowed values: ${ALLOWED_EMPLOYMENT_TYPES.join(', ')}`,
+            message: `Invalid employment type "${body.employmentType}". Allowed values: ${EMPLOYMENT_TYPES.join(', ')}`,
           },
           { status: 400 }
         );
       }
-      updateDoc.employmentType = body.employmentType;
+      // Interns keep role INTERN, an INT ID and type Intern; switching them here would split their records
+      if ((existingIsIntern && normalizedType !== 'Intern') || (!existingIsIntern && normalizedType === 'Intern')) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: existingIsIntern
+              ? 'An intern cannot be changed to another employment type from here.'
+              : 'An employee cannot be changed into an intern. Add them from the Interns page instead.',
+          },
+          { status: 400 }
+        );
+      }
+      updateDoc.employmentType = normalizedType;
+    } else if (updateDoc.employmentType !== undefined) {
+      // Empty value from the allowlist loop: keep the stored type instead of blanking it
+      delete updateDoc.employmentType;
+    }
+
+    // Internship details (interns only). extendedEndDate is system-managed, so the stored value is kept.
+    if (existingIsIntern && body.internship !== undefined && body.internship !== null) {
+      const startFallback = typeof (updateDoc.joiningDate ?? existing.joiningDate) === 'string'
+        ? String(updateDoc.joiningDate ?? existing.joiningDate).slice(0, 10)
+        : undefined;
+      const checked = sanitizeInternship(body.internship, startFallback);
+      if (!checked.ok) {
+        return NextResponse.json({ success: false, message: checked.message }, { status: 400 });
+      }
+      updateDoc.internship = {
+        ...checked.value,
+        ...(existing.internship?.extendedEndDate ? { extendedEndDate: existing.internship.extendedEndDate } : {}),
+      };
+      // Joining date follows the internship start date
+      updateDoc.joiningDate = checked.value.startDate;
     }
 
     // Status Validation
@@ -251,7 +301,13 @@ if (
     // Role Escalation Protection
     if (body.role !== undefined && body.role !== null && String(body.role).trim() !== '') {
       const targetRole = String(body.role).trim().toUpperCase();
-      const validRoles = ['EMPLOYEE', 'MANAGER', 'HR', 'ADMIN', 'SUPER_ADMIN'];
+      if (existingIsIntern !== isInternRole(targetRole)) {
+        return NextResponse.json(
+          { success: false, message: 'Intern and employee roles cannot be switched from here.' },
+          { status: 400 }
+        );
+      }
+      const validRoles = ['EMPLOYEE', 'MANAGER', 'HR', 'ADMIN', 'SUPER_ADMIN', 'INTERN'];
       if (!validRoles.includes(targetRole)) {
         return NextResponse.json(
           { success: false, message: `Invalid role: "${body.role}". Allowed roles: ${validRoles.join(', ')}` },

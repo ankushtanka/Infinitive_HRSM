@@ -497,8 +497,8 @@ export function useAuthStore() {
     if (norm === 'SUPERADMIN') return '/super-admin/dashboard';
     if (norm === 'ADMIN' || norm === 'HR' || norm === 'HRADMIN' || norm === 'HRMANAGER') return '/admin/dashboard';
     if (norm === 'MANAGER') return '/manager/dashboard';
-    if (norm === 'EMPLOYEE') return '/employee/dashboard';
-    return '/login';
+    if (norm === 'EMPLOYEE' || norm === 'INTERN' || norm === 'INTERNSHIP') 
+      return '/employee/dashboard';    return '/login';
   };
 
   return {

@@ -4,8 +4,17 @@ import { getAuthContext, checkPermissions } from '@/lib/auth';
 import { logAuditEvent } from '@/lib/audit';
 import { generateNumericOTP, hashToken, hashPassword, generateSecureToken } from '@/lib/cryptoAuth';
 import { sendOtpEmail } from '@/lib/email';
-import { generateNextEmployeeId } from '@/lib/employeeId';
+import { generateNextEmployeeId, generateNextInternId } from '@/lib/employeeId';
+import { isInternRole } from '@/lib/roleUtils';
 import { calculateSalaryBreakdown } from '@/lib/salaryBreakdown';
+import {
+  EMPLOYMENT_TYPES,
+  employmentTypeMongoFilter,
+  normalizeEmploymentType,
+  sanitizeInternship,
+  type InternshipDetails,
+} from '@/lib/employmentType';
+import type { EmploymentType } from '@/types/admin';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,6 +33,7 @@ export async function GET(req: NextRequest) {
     const search = searchParams.get('search')?.trim() || '';
     const department = searchParams.get('department')?.trim();
     const status = searchParams.get('status')?.trim();
+    const employmentTypeParam = searchParams.get('employmentType')?.trim();
 
     const { db } = await connectToDatabase();
     const orgId = auth.organizationId;
@@ -58,6 +68,17 @@ export async function GET(req: NextRequest) {
     }
     if (status && status !== 'All') {
       andConditions.push({ status });
+    }
+    // ?employmentType=Intern (any spelling); interns also match the legacy status 'Intern'
+    if (employmentTypeParam && employmentTypeParam !== 'All') {
+      const typeFilter = employmentTypeMongoFilter(employmentTypeParam);
+      if (!typeFilter) {
+        return NextResponse.json(
+          { success: false, message: `Invalid employment type "${employmentTypeParam}". Allowed values: ${EMPLOYMENT_TYPES.join(', ')}` },
+          { status: 400 }
+        );
+      }
+      andConditions.push(typeFilter);
     }
     if (search) {
       const safeSearch = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -139,9 +160,34 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, message: 'First name, last name, and email address are required.' }, { status: 400 });
     }
 
+    // Employment type (any known spelling) and, for interns, the internship details
+    let employmentType: EmploymentType = 'Full-time';
+    if (body.employmentType !== undefined && body.employmentType !== null && String(body.employmentType).trim() !== '') {
+      const normalized = normalizeEmploymentType(body.employmentType);
+      if (!normalized) {
+        return NextResponse.json(
+          { success: false, message: `Invalid employment type "${body.employmentType}". Allowed values: ${EMPLOYMENT_TYPES.join(', ')}` },
+          { status: 400 }
+        );
+      }
+      employmentType = normalized;
+    }
+    // Interns: role INTERN + employment type Intern + INT001-style ID, whichever of the two the caller sent
+    const isIntern = employmentType === 'Intern' || isInternRole(typeof role === 'string' ? role : undefined);
+    if (isIntern) employmentType = 'Intern';
+
+    let internship: InternshipDetails | null = null;
+    if (isIntern && body.internship !== undefined && body.internship !== null) {
+      const checked = sanitizeInternship(body.internship, typeof joiningDate === 'string' ? joiningDate : undefined);
+      if (!checked.ok) {
+        return NextResponse.json({ success: false, message: checked.message }, { status: 400 });
+      }
+      internship = checked.value;
+    }
+
     const cleanEmail = email.trim().toLowerCase();
-    const requestedRole = (role || 'EMPLOYEE').toUpperCase();
-    const validRoles = ['EMPLOYEE', 'MANAGER', 'HR', 'ADMIN', 'SUPER_ADMIN'];
+    const requestedRole = isIntern ? 'INTERN' : String(role || 'EMPLOYEE').toUpperCase();
+    const validRoles = ['EMPLOYEE', 'MANAGER', 'HR', 'ADMIN', 'SUPER_ADMIN', 'INTERN'];
 
     if (!validRoles.includes(requestedRole)) {
       return NextResponse.json({ success: false, message: `Invalid account role: ${role}` }, { status: 400 });
@@ -173,10 +219,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Generate or validate Employee ID
-    let employeeId = body.employeeId?.trim();
+    // Generate or validate Employee ID (interns always get the next INT ID)
+    const nextId = () => (isIntern ? generateNextInternId(db, orgId) : generateNextEmployeeId(db, orgId));
+    let employeeId = isIntern ? '' : body.employeeId?.trim();
     if (!employeeId || employeeId.toLowerCase().includes('auto') || employeeId === 'Auto-generated') {
-      employeeId = await generateNextEmployeeId(db, orgId);
+      employeeId = await nextId();
     }
 
     // Check duplicate employee ID; if duplicate exists under concurrency, auto-generate next ID
@@ -184,7 +231,7 @@ export async function POST(req: NextRequest) {
       await db.collection('users').findOne({ employeeId });
     if (existingEmpId) {
       // Regenerate next available ID safely to resolve conflict
-      employeeId = await generateNextEmployeeId(db, orgId);
+      employeeId = await nextId();
     }
 
     // Server-Side Manager Validation (Prevent cross-tenant assignment & self-reporting)
@@ -229,6 +276,8 @@ export async function POST(req: NextRequest) {
         status: 'Active',
         joiningDate: joiningDate || now.toISOString().split('T')[0],
         location: location || 'Headquarters',
+        employmentType,
+        ...(internship ? { internship } : {}),
         managerId: validatedManagerId,
         avatar: body.avatar || 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=100&auto=format&fit=crop&q=80',
         updatedAt: now,
@@ -273,8 +322,9 @@ export async function POST(req: NextRequest) {
       // Auto-create salary assignment using revised breakdown formula:
       // Basic 50%, HRA 30% of Basic (15% of Gross), Conveyance ₹2,353, Special Allowance remainder
       // For ₹25,000: Basic ₹12,500, HRA ₹3,750, Conveyance ₹2,353, Special Allowance ₹6,397
+      // Interns are paid a stipend (internship.stipend), not a salary structure
       const numSalary = Number(salary);
-      if (Number.isFinite(numSalary) && numSalary > 0) {
+      if (!isIntern && Number.isFinite(numSalary) && numSalary > 0) {
         const breakdown = calculateSalaryBreakdown(numSalary);
 
         await db.collection('salary_assignments').updateOne(
@@ -332,7 +382,7 @@ export async function POST(req: NextRequest) {
           purpose: 'ACCOUNT_INVITATION',
           userName: `${firstName.trim()} ${lastName.trim()}`,
           organizationName: orgId,
-          role: requestedRole,
+          role: isIntern ? 'Intern' : requestedRole,
         });
       } catch (emailErr: any) {
         console.error('Warning: sendOtpEmail threw an exception:', emailErr?.message || emailErr);
@@ -353,7 +403,7 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      await logAuditEvent(req, 'ADD_EMPLOYEE', { employeeId, details: employeeDoc });
+      await logAuditEvent(req, isIntern ? 'ADD_INTERN' : 'ADD_EMPLOYEE', { employeeId, details: employeeDoc });
       await logAuditEvent(req, 'OTP_REQUESTED', { details: { email: cleanEmail, purpose: 'ACCOUNT_INVITATION', emailDelivered: emailResult.success } });
 
       const newEmp = await db.collection('employees').findOne({ organizationId: orgId, employeeId });

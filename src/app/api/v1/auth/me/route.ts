@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { ObjectId } from 'mongodb';
 import { connectToDatabase } from '@/lib/mongodb';
 import { getAuthContext } from '@/lib/auth';
+import { normalizeRole } from '@/lib/roleUtils';
 
 export const dynamic = 'force-dynamic';
 
@@ -94,7 +95,8 @@ export async function GET(request: NextRequest) {
           userId: authCtx.userId,
           email: userEmail,
           name,
-          role: userRole as any,
+          // Token carries the permission level (INTERN -> EMPLOYEE); the response above keeps the stored role
+          role: normalizeRole(userRole),
           organizationId: authCtx.organizationId,
           employeeId: empId,
           expiresAt: expiresAtMs,

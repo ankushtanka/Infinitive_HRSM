@@ -30,6 +30,7 @@ import {
   CheckSquare,
   Radio,
   Laptop,
+  GraduationCap,
 } from 'lucide-react';
 
 import { useEmsStore } from '@/store/emsStore';
@@ -65,6 +66,7 @@ const adminNavSections: NavSection[] = [
     category: 'PEOPLE',
     items: [
       { name: 'Employees', href: '/admin/employees', icon: Users },
+      { name: 'Interns', href: '/admin/interns', icon: GraduationCap },
       { name: 'Reminders & Alerts', href: '/admin/reminders', icon: Bell },
       { name: 'Organization', href: '/admin/organization', icon: Building2 },
     ],

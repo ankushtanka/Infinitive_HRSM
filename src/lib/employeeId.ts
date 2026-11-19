@@ -20,6 +20,8 @@ async function getHighestStandardNumericId(db: Db, orgId: string): Promise<numbe
   const processId = (rawId: any) => {
     if (rawId && typeof rawId === 'string') {
       const clean = rawId.trim().toUpperCase();
+      // Intern IDs (INT001...) have their own sequence and must not push the EMP sequence forward
+      if (/^INT-?\d+$/i.test(clean)) return;
       const match = clean.match(/^EMP-?(\d+)$/i);
       if (match && match[1]) {
         const num = parseInt(match[1], 10);
@@ -225,4 +227,66 @@ export async function generateNextSuperAdminId(db: Db): Promise<string> {
   return `SUP${Date.now().toString().slice(-4)}`;
 }
 
+/** Formats an intern sequence number: 1 -> INT001, 42 -> INT042, 1205 -> INT1205. */
+export function formatInternId(seq: number): string {
+  return `INT${String(seq).padStart(3, '0')}`;
+}
 
+/**
+ * Server-side Intern ID Generator (Atomic & Concurrency Safe)
+ * Format: INT + 3 digits (INT001, INT002, ...), a sequence per organization, separate from EMP IDs.
+ * On first use the counter is seeded from the highest INT ID already stored for the organization.
+ */
+export async function generateNextInternId(db: Db, organizationId: string): Promise<string> {
+  const orgId = organizationId?.trim() || 'org-default';
+  const counterId = `int_seq_${orgId.toLowerCase()}`;
+
+  const counterDoc = await db.collection('counters').findOne({ _id: counterId as any });
+  if (!counterDoc || typeof counterDoc.seq !== 'number') {
+    const [empDocs, userDocs] = await Promise.all([
+      db.collection('employees')
+        .find({ organizationId: orgId, employeeId: /^INT-?\d+$/i }, { projection: { employeeId: 1 } })
+        .toArray(),
+      db.collection('users')
+        .find({ organizationId: orgId, employeeId: /^INT-?\d+$/i }, { projection: { employeeId: 1 } })
+        .toArray(),
+    ]);
+    const nums: number[] = [];
+    [...empDocs, ...userDocs].forEach((d) => {
+      const match = String(d.employeeId || '').trim().match(/^INT-?(\d+)$/i);
+      if (match) {
+        const n = parseInt(match[1], 10);
+        if (Number.isFinite(n)) nums.push(n);
+      }
+    });
+    await db.collection('counters').updateOne(
+      { _id: counterId as any },
+      { $set: { seq: nums.length > 0 ? Math.max(...nums) : 0, organizationId: orgId, updatedAt: new Date() } },
+      { upsert: true }
+    );
+  }
+
+  let loopCount = 0;
+  while (loopCount < 100) {
+    const res = await db.collection('counters').findOneAndUpdate(
+      { _id: counterId as any },
+      { $inc: { seq: 1 }, $set: { updatedAt: new Date() } },
+      { returnDocument: 'after', upsert: true }
+    );
+
+    const nextSeq = res?.seq ?? res?.value?.seq;
+    if (typeof nextSeq === 'number') {
+      const candidate = formatInternId(nextSeq);
+      const [existingEmp, existingUser] = await Promise.all([
+        db.collection('employees').findOne({ organizationId: orgId, employeeId: candidate }),
+        db.collection('users').findOne({ employeeId: candidate }),
+      ]);
+      if (!existingEmp && !existingUser) {
+        return candidate;
+      }
+    }
+    loopCount++;
+  }
+
+  return `INT${Date.now().toString().slice(-6)}`;
+}
