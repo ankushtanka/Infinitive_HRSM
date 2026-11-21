@@ -6,6 +6,8 @@ import { createNotification } from '@/lib/notifications/notificationService';
 import { ObjectId } from 'mongodb';
 import { ApprovalItem, ApprovalType, ApprovalStatus } from '@/types/approval';
 import { formatLeaveDurationText, reconcileAttendanceForLeaveRange, checkIsSelfApproval } from '@/lib/leaveUtils';
+import { getISTDateString } from '@/lib/dateUtils';
+import { decideWfhRequest, ensureWfhRequestsForCheckIns, processRejectedWfhAbsences } from '@/lib/wfh';
 
 export const dynamic = 'force-dynamic';
 
@@ -273,6 +275,59 @@ export async function GET(req: NextRequest) {
       allItems.push(...hrDocs.map(mapHrRequestToApproval));
     }
 
+        // 4. Work From Home requests (with that day's check-in and work summary when available)
+    if (filterType === 'ALL' || filterType === 'WFH') {
+      await ensureWfhRequestsForCheckIns(db, orgId).catch((err) => console.warn('[Approvals] WFH request backfill skipped:', err));
+      await processRejectedWfhAbsences(db, { today: getISTDateString(new Date()), organizationId: orgId }).catch((err) =>
+        console.warn('[Approvals] Rejected WFH check skipped:', err)
+      );
+
+      const wfhQuery: any = { organizationId: orgId, status: { $in: ['Pending', 'Approved', 'Rejected', 'Cancelled'] } };
+      if (auth.role === 'MANAGER') {
+        wfhQuery.employeeId = { $in: managerTeamEmpIds };
+      }
+      const wfhDocs = await db.collection('wfh_requests').find(wfhQuery).sort({ createdAt: -1 }).limit(500).toArray();
+      const wfhDates = Array.from(new Set(wfhDocs.map((d: any) => d.date)));
+      const wfhAttendance = wfhDates.length
+        ? await db.collection('attendance').find({ organizationId: orgId, workMode: 'WFH', date: { $in: wfhDates } }).toArray()
+        : [];
+      const attendanceByKey = new Map(wfhAttendance.map((a: any) => [`${a.employeeId}|${a.date}`, a]));
+
+      allItems.push(
+        ...wfhDocs.map((doc: any): ApprovalItem => {
+          const att: any = attendanceByKey.get(`${doc.employeeId}|${doc.date}`);
+          const statusUpper = String(doc.status || 'Pending').toUpperCase();
+          const normStatus: ApprovalStatus =
+            statusUpper === 'APPROVED' ? 'APPROVED' : statusUpper === 'REJECTED' ? 'REJECTED' : statusUpper === 'CANCELLED' ? 'CANCELLED' : 'PENDING';
+          const id = doc._id.toString();
+          return {
+            id,
+            _id: id,
+            organizationId: doc.organizationId,
+            requestType: 'WFH',
+            referenceNumber: `WFH-${id.slice(-6).toUpperCase()}`,
+            employeeId: doc.employeeId,
+            employeeName: doc.employeeName || 'Employee',
+            department: doc.department || 'General',
+            designation: doc.designation || 'Team Member',
+            title: `Work From Home (${doc.date})${doc.source === 'CHECK_IN' ? ' · checked in from home' : ''}`,
+            details: {
+              attendanceDate: doc.date,
+              ...(att?.checkIn && att.checkIn !== '--:--' ? { checkInTime: att.checkIn, checkOutTime: att.checkOut || 'not yet' } : {}),
+              reason: doc.reason || (doc.source === 'CHECK_IN' ? 'Checked in as Work From Home without an advance request.' : ''),
+              adminComments: doc.decisionComments || '',
+              ...(att?.workSummary ? { workSummary: att.workSummary } : {}),
+            },
+            status: normStatus,
+            submittedAt: doc.createdAt || new Date().toISOString(),
+            updatedAt: doc.updatedAt,
+            sourceCollection: 'wfh_requests',
+            history: doc.history || [],
+          };
+        })
+      );
+    }
+
     // Filter by Type if specific
     if (filterType !== 'ALL') {
       allItems = allItems.filter((i) => i.requestType === filterType);
@@ -420,6 +475,7 @@ export async function POST(req: NextRequest) {
     if (!targetCollection) {
       if (requestType === 'LEAVE') targetCollection = 'leaves';
       else if (requestType === 'ATTENDANCE_CORRECTION') targetCollection = 'attendance_corrections';
+      else if (requestType === 'WFH') targetCollection = 'wfh_requests';
       else targetCollection = 'hr_requests';
     }
 
@@ -475,6 +531,28 @@ export async function POST(req: NextRequest) {
           { status: 403 }
         );
       }
+    }
+
+    // -----------------------------------------------------------------
+    // WORK FROM HOME REQUEST PROCESSING
+    // -----------------------------------------------------------------
+    if (requestType === 'WFH' || targetCollection === 'wfh_requests') {
+      const decision = await decideWfhRequest(db, {
+        organizationId: orgId,
+        request: targetDoc,
+        action: normalizedAction === 'APPROVE' ? 'APPROVE' : 'REJECT',
+        comments,
+        decidedBy: { name: auth.name || auth.email || 'Approver', userId: auth.userId, role: auth.role },
+        now,
+      });
+      if (!decision.ok) {
+        return NextResponse.json({ success: false, message: decision.message }, { status: decision.status });
+      }
+      await logAuditEvent(req, normalizedAction === 'APPROVE' ? 'WFH_APPROVED' : 'WFH_REJECTED', {
+        employeeId: targetDoc.employeeId,
+        details: { date: targetDoc.date, comments: comments || '', extendedTo: decision.extendedTo || null },
+      });
+      return NextResponse.json({ success: true, message: decision.message, data: decision.request });
     }
 
     // -----------------------------------------------------------------

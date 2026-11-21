@@ -29,6 +29,7 @@ import {
 import { useEmsStore } from '@/store/emsStore';
 import { useAuthStore } from '@/store/authStore';
 import { formatRoleLabel } from '@/lib/roleUtils';
+import { TodayDate } from '@/components/layout/TodayDate';
 import { LogoutConfirmModal } from '@/components/modals/LogoutConfirmModal';
 
 interface HeaderProps {
@@ -211,6 +212,7 @@ export const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
       </div>
 
       {/* Center: Global Instant Search Popover */}
+            <TodayDate className="hidden lg:flex ml-3" />
       <div ref={searchRef} className="relative max-w-md flex-1 px-4 sm:px-8">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />

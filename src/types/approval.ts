@@ -3,7 +3,8 @@ export type ApprovalType =
   | 'ATTENDANCE_CORRECTION'
   | 'PROFILE_CHANGE'
   | 'ASSET_REQUEST'
-  | 'RESIGNATION';
+  | 'RESIGNATION'
+  | 'WFH';
 
 export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED';
 
@@ -62,6 +63,7 @@ export interface ApprovalItem {
     requestedEndTime?: string;
     requestedHours?: number;
     requestedDays?: number;
+     workSummary?: string;
 
     [key: string]: any;
   };

@@ -3,6 +3,7 @@ import { Portal } from '@/components/modals/Portal';
 
 import React, { useState, useRef, useEffect } from 'react';
 import { AdminLayout } from '@/components/layout/AdminLayout';
+import { OfficeLocationsSettings } from '@/components/settings/OfficeLocationsSettings';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import { useEmsStore } from '@/store/emsStore';
 import { useAuthStore } from '@/store/authStore';
@@ -1065,6 +1066,7 @@ export default function SettingsPage() {
           )}
 
           {/* TAB 3: ATTENDANCE RULES */}
+          {activeTab === 'attendance' && <OfficeLocationsSettings />}
           {activeTab === 'attendance' && (
             <form onSubmit={handleSaveAttendance} className="space-y-6">
               <div className="border-b border-slate-100 pb-4">

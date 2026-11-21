@@ -29,7 +29,8 @@ import {
   formatISTDate,
   formatWorkingHours,
 } from '@/lib/dateUtils';
-import { getCurrentPositionOnce } from '@/lib/clientGeo';
+import { openCheckInDialog, openCheckOutDialog } from '@/components/attendance/checkInDialog';
+import { WfhRequestsCard } from '@/components/attendance/WfhWidgets';
 import { EmployeeTrackingPanel } from '@/components/tracking/EmployeeTrackingPanel';
 
 interface AttendanceRecord {
@@ -176,35 +177,22 @@ export default function EmployeeAttendancePage() {
   }, [logs]);
 
   // Handle Clock-In / Clock-Out toggle
-  const handleClockToggle = async () => {
+    const handleClockToggle = async () => {
     if (isCheckedOut || isClocking) return;
 
     setIsClocking(true);
-    const action = isCheckedIn ? 'CLOCK_OUT' : 'CLOCK_IN';
-
     try {
-      // Ask for the device location (null if denied/unavailable; the server decides whether that is allowed)
-      const geo = await getCurrentPositionOnce();
-
-      const res = await fetch('/api/v1/attendance', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, ...(geo ? { geo } : {}) }),
-      });
-
-      const data = await res.json();
-      if (data.success) {
-        showToast(
-          action === 'CLOCK_IN'
-            ? 'Attendance checked in successfully.'
-            : 'Attendance checked out successfully.'
-        );
+      // Check In asks "Office or Work From Home" and checks the location; Check Out sends the location for the record
+      const result = isCheckedIn ? await openCheckOutDialog() : await openCheckInDialog();
+      if (!result) return; // dialog closed
+      if (result.success) {
+        showToast(result.message);
         fetchAttendance();
       } else {
-        showToast(data.message || 'Unable to update attendance. Please try again.', 'error');
+        showToast(result.message || 'Unable to update attendance. Please try again.', 'error');
       }
     } catch (err: any) {
-      showToast(err.message || 'Unable to update attendance. Please try again.', 'error');
+      showToast(err?.message || 'Unable to update attendance. Please try again.', 'error');
     } finally {
       setIsClocking(false);
     }
@@ -367,6 +355,8 @@ export default function EmployeeAttendancePage() {
 
               {/* Live tracking: consent, start/stop, status indicator */}
               <EmployeeTrackingPanel checkedIn={isCheckedIn} />
+              
+                                    <WfhRequestsCard />
 
               {/* Monthly Summary Cards */}
               <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">

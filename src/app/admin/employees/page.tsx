@@ -296,6 +296,9 @@ export default function EmployeesPage() {
   const existingEmployeeIds = new Set(state.employees.map((e) => e.employeeId.trim().toLowerCase()));
 
   const filteredEmployees = state.employees.filter((emp) => {
+
+     // Interns are listed and managed on the Interns page only
+    if (/^INT\d+$/i.test(emp.employeeId || '') || /^intern/i.test(String(emp.employmentType || '')) || String(emp.status || '').toLowerCase() === 'intern') return false;
     const matchesSearch =
       emp.firstName.toLowerCase().includes(searchTerm.toLowerCase()) ||
       emp.lastName.toLowerCase().includes(searchTerm.toLowerCase()) ||

@@ -30,6 +30,7 @@ import {
   Laptop,
   UserMinus,
   Flame,
+  Home,
 } from 'lucide-react';
 import { ApprovalItem, ApprovalType, ApprovalStatus, ApprovalsSummaryStats } from '@/types/approval';
 
@@ -213,6 +214,13 @@ export default function UnifiedApprovalsPage() {
           bg: 'bg-rose-50 text-rose-700 border-rose-200',
           icon: UserMinus,
         };
+         case 'WFH':
+        return {
+          label: 'Work From Home',
+          bg: 'bg-blue-50 text-blue-700 border-blue-200',
+          icon: Home,
+        };
+
       default:
         return {
           label: type,
@@ -365,6 +373,7 @@ export default function UnifiedApprovalsPage() {
             <option value="ALL">All Request Types</option>
             <option value="LEAVE">Leave Requests</option>
             <option value="ATTENDANCE_CORRECTION">Attendance Corrections</option>
+             <option value="WFH">Work From Home Requests</option>
             <option value="PROFILE_CHANGE">Profile Change Requests</option>
             <option value="ASSET_REQUEST">Asset Requests</option>
             <option value="RESIGNATION">Resignation / Exit Requests</option>
@@ -770,6 +779,12 @@ export default function UnifiedApprovalsPage() {
                   <div className="rounded-xl bg-slate-100 p-3 border border-slate-200">
                     <span className="font-bold text-slate-700 block mb-0.5">Reason / Description:</span>
                     <p className="text-slate-800 leading-relaxed italic">{selectedItem.details.reason}</p>
+                  </div>
+                )}
+                {selectedItem.details?.workSummary && (
+                  <div className="rounded-xl bg-blue-50 p-3 border border-blue-200">
+                    <span className="font-bold text-blue-900 block mb-0.5">Work done (written at check-out):</span>
+                    <p className="text-slate-800 leading-relaxed whitespace-pre-line">{selectedItem.details.workSummary}</p>
                   </div>
                 )}
                 {selectedItem.details?.adminComments && (

@@ -6,6 +6,7 @@ import { ObjectId } from 'mongodb';
 import { calculateSalaryBreakdown } from '@/lib/salaryBreakdown';
 import { EMPLOYMENT_TYPES, isInternRecord, normalizeEmploymentType, sanitizeInternship } from '@/lib/employmentType';
 import { isInternRole } from '@/lib/roleUtils';
+import { addDaysToIsoDate, totalExtensionDays } from '@/lib/internshipExtension';
 
 export const dynamic = 'force-dynamic';
 
@@ -276,9 +277,15 @@ if (
       if (!checked.ok) {
         return NextResponse.json({ success: false, message: checked.message }, { status: 400 });
       }
+            // Recorded extensions (leave / WFH rules) stay, and the extended end date moves with the planned end date
+      const extensions = Array.isArray(existing.internship?.extensions) ? existing.internship.extensions : [];
       updateDoc.internship = {
         ...checked.value,
-        ...(existing.internship?.extendedEndDate ? { extendedEndDate: existing.internship.extendedEndDate } : {}),
+        ...(extensions.length > 0
+          ? { extensions, extendedEndDate: addDaysToIsoDate(checked.value.endDate, totalExtensionDays(extensions)) }
+          : existing.internship?.extendedEndDate
+          ? { extendedEndDate: existing.internship.extendedEndDate }
+          : {}),
       };
       // Joining date follows the internship start date
       updateDoc.joiningDate = checked.value.startDate;

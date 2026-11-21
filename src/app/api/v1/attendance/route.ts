@@ -15,8 +15,32 @@ import {
   parseTimeToMinutes,
 } from '@/lib/attendanceAlerts';
 import { startAttendanceAlertsCronJob } from '@/jobs/attendanceAlertsJob';
+import { parseGeo } from '@/lib/geo';
+import {
+  checkOfficeLocation,
+  isLateCheckIn,
+  loadShiftRules,
+  normalizeWorkMode,
+  shiftStartMinutes,
+  summarizePunchGeo,
+} from '@/lib/officeAttendance';
+import {
+  WORK_SUMMARY_MAX_LENGTH,
+  WORK_SUMMARY_MIN_LENGTH,
+  createWfhRequest,
+  findWfhRequestForDate,
+} from '@/lib/wfh';
 
 export const dynamic = 'force-dynamic';
+
+/** A real punch time (not empty and not the '--:--' placeholder used on leave days). */
+function hasPunch(value: unknown): boolean {
+  if (typeof value === 'string') {
+    const text = value.trim();
+    return text !== '' && text !== '--:--';
+  }
+  return Boolean(value);
+}
 
 export async function GET(req: NextRequest) {
   try {
@@ -90,6 +114,9 @@ export async function GET(req: NextRequest) {
 
       return {
         ...r,
+        // Listings carry only the location check result, never raw coordinates
+        geo: summarizePunchGeo(r.geo),
+        checkOutGeo: summarizePunchGeo(r.checkOutGeo),
         date: formattedDate,
         checkIn: checkInFormatted,
         checkOut: checkOutFormatted,
@@ -121,7 +148,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { action, employeeId, date, checkIn, checkOut, status, method, location } = body;
+    const { action, employeeId, date, checkIn, checkOut, status, method, location, geo } = body;
 
     const now = new Date();
     const today = getISTDateString(now);
@@ -172,47 +199,87 @@ export async function POST(req: NextRequest) {
 
     // Handle Clock-In Action
     if (action === 'CLOCK_IN') {
+      const workMode = normalizeWorkMode(body.workMode);
+
+      // A full-day leave approved for today: nothing to punch in for
+      const leaveToday = await db.collection('leaves').findOne({
+        organizationId: orgId,
+        employeeId: targetEmpId,
+        status: { $in: ['Approved', 'APPROVED'] },
+        startDate: { $lte: targetDate },
+        endDate: { $gte: targetDate },
+        $or: [{ durationType: 'FULL_DAY' }, { durationDays: { $gte: 1 } }],
+      });
+      if (leaveToday) {
+        return NextResponse.json(
+          { success: false, code: 'ON_LEAVE', message: `You are on approved ${leaveToday.leaveType || 'leave'} today, so check-in is not needed.` },
+          { status: 400 }
+        );
+      }
+
       const existingToday = await db.collection('attendance').findOne({
         organizationId: orgId,
         employeeId: targetEmpId,
         date: targetDate,
       });
-
-      if (existingToday && (existingToday.checkIn || existingToday.checkInTime) && (!existingToday.checkOut && !existingToday.checkOutTime)) {
+      const alreadyIn = hasPunch(existingToday?.checkIn) || hasPunch(existingToday?.checkInTime);
+      const alreadyOut = hasPunch(existingToday?.checkOut) || hasPunch(existingToday?.checkOutTime);
+      if (alreadyIn && !alreadyOut) {
         return NextResponse.json(
           { success: false, message: 'You are already checked in for today.' },
           { status: 400 }
         );
       }
-
-      // Calculate Late / Present in IST
-      const orgSettings = await db.collection('organization_settings').findOne({ organizationId: orgId });
-      const attRules = orgSettings?.attendance || { workStartTime: '09:00 AM', gracePeriodMinutes: 15, lateMarkingEnabled: true };
-
-      let calculatedStatus = 'Present';
-      try {
-        const [timePart, modifier] = nowTimeStr.split(' ');
-        let [hours, minutes] = timePart.split(':').map(Number);
-        if (modifier === 'PM' && hours < 12) hours += 12;
-        if (modifier === 'AM' && hours === 12) hours = 0;
-
-        const [shiftTimePart, shiftModifier] = (attRules.workStartTime || '09:00 AM').split(' ');
-        let [shiftHours, shiftMinutes] = shiftTimePart.split(':').map(Number);
-        if (shiftModifier === 'PM' && shiftHours < 12) shiftHours += 12;
-        if (shiftModifier === 'AM' && shiftHours === 12) shiftHours = 0;
-
-        const checkInMins = hours * 60 + minutes;
-        const shiftMins = shiftHours * 60 + shiftMinutes;
-        const graceMins = Number(attRules.gracePeriodMinutes) || 15;
-
-        if (attRules.lateMarkingEnabled && checkInMins > shiftMins + graceMins) {
-          calculatedStatus = 'Late';
-        }
-      } catch {
-        calculatedStatus = 'Present';
+      if (alreadyIn && alreadyOut) {
+        // Checking in again would overwrite today's completed attendance
+        return NextResponse.json(
+          { success: false, code: 'DAY_COMPLETED', message: 'You have already checked in and checked out today.' },
+          { status: 400 }
+        );
       }
 
-      const clockInDoc = {
+      const attRules = await loadShiftRules(db, orgId);
+
+      // Office: must be at an office when the location rule is on. WFH: location is stored for the record only.
+      let geoDoc: Record<string, any> | null = null;
+      let officeName: string | null = null;
+      if (workMode === 'OFFICE') {
+        const officeCheck = checkOfficeLocation(attRules, geo, now);
+        if (!officeCheck.ok) {
+          return NextResponse.json(
+            { success: false, code: officeCheck.code, message: officeCheck.message },
+            { status: officeCheck.status }
+          );
+        }
+        geoDoc = officeCheck.geoDoc;
+        officeName = officeCheck.office?.name || null;
+      } else {
+        const wfhGeo = parseGeo(geo);
+        geoDoc = wfhGeo ? { ...wfhGeo, capturedAt: now } : null;
+      }
+
+      // WFH approved in advance counts as approved; a rejected one means office only; otherwise it waits for mentor / HR
+      let wfhStatus: 'APPROVED' | 'PENDING' | null = null;
+      let wfhRequest: any = null;
+      if (workMode === 'WFH') {
+        wfhRequest = await findWfhRequestForDate(db, orgId, targetEmpId, targetDate);
+        if (wfhRequest?.status === 'Rejected') {
+          return NextResponse.json(
+            {
+              success: false,
+              code: 'WFH_REJECTED',
+              message: 'Your Work From Home request for today was rejected. Please check in from the office.',
+            },
+            { status: 400 }
+          );
+        }
+        wfhStatus = wfhRequest?.status === 'Approved' ? 'APPROVED' : 'PENDING';
+      }
+
+      const isLate = isLateCheckIn(attRules, nowTimeStr);
+      const calculatedStatus = workMode === 'WFH' ? 'Work From Home' : isLate ? 'Late' : 'Present';
+
+      const clockInDoc: Record<string, any> = {
         organizationId: orgId,
         employeeId: targetEmpId,
         employeeName: empName || 'Employee',
@@ -222,8 +289,14 @@ export async function POST(req: NextRequest) {
         checkOut: '',
         checkOutTime: null,
         status: calculatedStatus,
+        workMode,
+        isLate,
+        wfhStatus,
+        wfhRequestId: wfhRequest ? String(wfhRequest._id) : null,
         method: method || 'Web',
-        location: location || 'Office HQ',
+        location: workMode === 'WFH' ? 'Work From Home' : officeName || 'Office HQ',
+        geo: geoDoc,
+        checkOutGeo: null,
         workingHours: 0,
         updatedAt: now,
       };
@@ -234,19 +307,34 @@ export async function POST(req: NextRequest) {
         { upsert: true }
       );
 
-      await logAuditEvent(req, 'CLOCK_IN', { employeeId: targetEmpId, details: clockInDoc });
-
-      if (calculatedStatus === 'Late') {
+      // Same-day WFH without a request: create one so it shows up in the Approval Center
+      if (workMode === 'WFH' && !wfhRequest) {
         try {
-          const [shiftTimePart, shiftModifier] = (attRules.workStartTime || '09:00 AM').split(' ');
-          let [sHours, sMinutes] = shiftTimePart.split(':').map(Number);
-          if (shiftModifier === 'PM' && sHours < 12) sHours += 12;
-          if (shiftModifier === 'AM' && sHours === 12) sHours = 0;
-          const [nowTimePart, nowModifier] = nowTimeStr.split(' ');
-          let [nHours, nMinutes] = nowTimePart.split(':').map(Number);
-          if (nowModifier === 'PM' && nHours < 12) nHours += 12;
-          if (nowModifier === 'AM' && nHours === 12) nHours = 0;
-          const diffMins = Math.max(1, (nHours * 60 + nMinutes) - (sHours * 60 + sMinutes));
+          const created = await createWfhRequest(db, {
+            organizationId: orgId,
+            employee: targetEmployee,
+            date: targetDate,
+            reason: '',
+            source: 'CHECK_IN',
+            requestedBy: { name: auth.name || empName, userId: auth.userId, role: auth.role },
+            now,
+          });
+          clockInDoc.wfhRequestId = String(created._id);
+          await db.collection('attendance').updateOne(
+            { organizationId: orgId, employeeId: targetEmpId, date: targetDate },
+            { $set: { wfhRequestId: clockInDoc.wfhRequestId } }
+          );
+        } catch (wfhErr) {
+          console.error('[Attendance] Could not create the WFH request:', wfhErr);
+        }
+      }
+
+      await logAuditEvent(req, 'CLOCK_IN', { employeeId: targetEmpId, details: { ...clockInDoc, geo: summarizePunchGeo(geoDoc) } });
+
+      if (isLate) {
+        try {
+          const workStartTime = attRules.workStartTime || '10:00 AM';
+          const diffMins = Math.max(1, (parseTimeToMinutes(nowTimeStr) ?? 0) - shiftStartMinutes(attRules));
           const formattedDur = formatDurationMinutes(diffMins);
 
           createAttendanceAlert(db, {
@@ -260,10 +348,10 @@ export async function POST(req: NextRequest) {
             alertType: 'LATE_ARRIVAL',
             date: targetDate,
             time: nowTimeStr,
-            expectedTime: attRules.workStartTime || '09:00 AM',
+            expectedTime: workStartTime,
             actualTime: nowTimeStr,
             diffMinutes: diffMins,
-            message: `Employee arrived late: checked in at ${nowTimeStr} (${formattedDur} after scheduled start ${attRules.workStartTime || '09:00 AM'}).`,
+            message: `Employee arrived late${workMode === 'WFH' ? ' (Work From Home)' : ''}: checked in at ${nowTimeStr} (${formattedDur} after scheduled start ${workStartTime}).`,
             status: 'PENDING',
             employeeEmail: targetEmployee.email,
           }).catch((err) => console.error('[Attendance] Auto late alert error:', err));
@@ -272,10 +360,18 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      let message = isLate ? `Checked in at ${nowTimeStr} (marked Late).` : `Checked in at ${nowTimeStr}.`;
+      if (workMode === 'OFFICE' && officeName) message = `${message} Location: ${officeName}.`;
+      if (workMode === 'WFH') {
+        message = wfhStatus === 'APPROVED'
+          ? `${message} Work From Home (already approved).`
+          : `${message} Work From Home is waiting for approval from your mentor / HR.`;
+      }
+
       return NextResponse.json({
         success: true,
-        message: 'Attendance checked in successfully.',
-        data: clockInDoc,
+        message,
+        data: { ...clockInDoc, geo: summarizePunchGeo(geoDoc) },
       });
     }
 
@@ -287,18 +383,39 @@ export async function POST(req: NextRequest) {
         date: targetDate,
       });
 
-      if (!existingToday || (!existingToday.checkIn && !existingToday.checkInTime)) {
+      if (!existingToday || (!hasPunch(existingToday.checkIn) && !hasPunch(existingToday.checkInTime))) {
         return NextResponse.json(
           { success: false, message: 'Cannot check out without checking in first.' },
           { status: 400 }
         );
       }
 
-      if (existingToday.checkOut || existingToday.checkOutTime) {
+      if (hasPunch(existingToday.checkOut) || hasPunch(existingToday.checkOutTime)) {
         return NextResponse.json(
           { success: false, message: 'You have already checked out for today.' },
           { status: 400 }
         );
+      }
+
+      // Work From Home days need a short note of the work done (seen by mentor / HR)
+      const workSummary = typeof body.workSummary === 'string' ? body.workSummary.trim() : '';
+      if (existingToday.workMode === 'WFH') {
+        if (workSummary.length < WORK_SUMMARY_MIN_LENGTH) {
+          return NextResponse.json(
+            {
+              success: false,
+              code: 'WORK_SUMMARY_REQUIRED',
+              message: `Write what you worked on today (at least ${WORK_SUMMARY_MIN_LENGTH} characters) to check out from Work From Home.`,
+            },
+            { status: 400 }
+          );
+        }
+        if (workSummary.length > WORK_SUMMARY_MAX_LENGTH) {
+          return NextResponse.json(
+            { success: false, code: 'WORK_SUMMARY_TOO_LONG', message: `Keep the work summary under ${WORK_SUMMARY_MAX_LENGTH} characters.` },
+            { status: 400 }
+          );
+        }
       }
 
       // Calculate working hours using timestamps as source of truth
@@ -309,10 +426,13 @@ export async function POST(req: NextRequest) {
         nowTimeStr
       );
 
-      const updateData = {
+      const outGeo = parseGeo(geo);
+      const updateData: Record<string, any> = {
         checkOut: nowTimeStr,
         checkOutTime: now,
         workingHours: hoursWorked,
+        checkOutGeo: outGeo ? { ...outGeo, capturedAt: now } : null,
+        ...(existingToday.workMode === 'WFH' ? { workSummary } : {}),
         updatedAt: now,
       };
 
@@ -321,11 +441,10 @@ export async function POST(req: NextRequest) {
         { $set: updateData }
       );
 
-      await logAuditEvent(req, 'CLOCK_OUT', { employeeId: targetEmpId, details: updateData });
+      await logAuditEvent(req, 'CLOCK_OUT', { employeeId: targetEmpId, details: { ...updateData, checkOutGeo: summarizePunchGeo(updateData.checkOutGeo) } });
 
       try {
-        const orgSettings = await db.collection('organization_settings').findOne({ organizationId: orgId });
-        const attRules = orgSettings?.attendance || { workEndTime: '06:00 PM' };
+        const attRules = await loadShiftRules(db, orgId);
         const workEndTime = attRules.workEndTime || '06:00 PM';
         const shiftEndMins = parseTimeToMinutes(workEndTime) || 1080;
         const [timePart, modifier] = nowTimeStr.split(' ');
@@ -363,8 +482,13 @@ export async function POST(req: NextRequest) {
 
       return NextResponse.json({
         success: true,
-        message: 'Attendance checked out successfully.',
-        data: { ...existingToday, ...updateData },
+        message: `Checked out at ${nowTimeStr}.`,
+        data: {
+          ...existingToday,
+          ...updateData,
+          geo: summarizePunchGeo(existingToday.geo),
+          checkOutGeo: summarizePunchGeo(updateData.checkOutGeo),
+        },
       });
     }
 
@@ -389,8 +513,9 @@ export async function POST(req: NextRequest) {
       breakDuration: body.breakDuration || '1 hr',
       workingHours: workingHoursValue,
       status: manualStatus,
+      workMode: manualStatus === 'Work From Home' ? 'WFH' : 'OFFICE',
       method: method || 'Web',
-      location: location || 'Office HQ',
+      location: location || (manualStatus === 'Work From Home' ? 'Work From Home' : 'Office HQ'),
       updatedAt: now,
     };
 

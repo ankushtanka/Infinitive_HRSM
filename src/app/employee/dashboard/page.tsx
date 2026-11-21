@@ -3,6 +3,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AdminLayout } from '@/components/layout/AdminLayout';
+import { openCheckInDialog, openCheckOutDialog } from '@/components/attendance/checkInDialog';
+import { WfhStatusBadge } from '@/components/attendance/WfhWidgets';
 import { useAuthStore } from '@/store/authStore';
 import Link from 'next/link';
 import { getISTDateString, formatISTTime } from '@/lib/dateUtils';
@@ -217,38 +219,31 @@ export default function EmployeeDashboardPage() {
   const unreadNotifCount = notifications.filter((n) => n.status !== 'READ').length;
 
   // Attendance states
-  const hasCheckedIn = Boolean(todayAttendance?.checkIn || todayAttendance?.clockIn);
-  const hasCheckedOut = Boolean(todayAttendance?.checkOut || todayAttendance?.clockOut);
+ const isPunchTime = (value: unknown) => typeof value === 'string' && value.trim() !== '' && value.trim() !== '--:--';
+  const hasCheckedIn = isPunchTime(todayAttendance?.checkIn) || isPunchTime(todayAttendance?.clockIn);
+  const hasCheckedOut = isPunchTime(todayAttendance?.checkOut) || isPunchTime(todayAttendance?.clockOut);
+  
   const isClockedIn = hasCheckedIn && !hasCheckedOut;
   const isAttendanceComplete = hasCheckedIn && hasCheckedOut;
 
   // Clock in/out action using real POST /api/v1/attendance contract
-  const handleAttendanceClockToggle = async () => {
-    if (isAttendanceComplete) return;
+    const handleAttendanceClockToggle = async () => {
+    if (isAttendanceComplete || isClockingIn) return;
 
     setIsClockingIn(true);
-    const action = isClockedIn ? 'CLOCK_OUT' : 'CLOCK_IN';
-
     try {
-      const res = await fetch('/api/v1/attendance', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action }),
-      });
-
-      const data = await res.json();
-      if (data.success) {
-        showToast(
-          action === 'CLOCK_IN'
-            ? 'Check In recorded successfully! Have a productive day.'
-            : 'Check Out recorded successfully! Have a great evening.'
-        );
-        fetchDashboardData(true);
+      // Check In asks "Office or Work From Home" and checks the location; Check Out sends the location for the record
+      const result = isClockedIn ? await openCheckOutDialog() : await openCheckInDialog();
+      if (!result) return; // dialog closed
+      if (result.success) {
+        // Refresh first: the refresh shows its own toast, and the check-in message (e.g. Late / WFH pending) must stay visible
+        await fetchDashboardData(true);
+        showToast(result.message);
       } else {
-        showToast(data.message || 'Failed to update attendance.', 'error');
+        showToast(result.message || 'Failed to update attendance.', 'error');
       }
     } catch (err: any) {
-      showToast(err.message || 'Attendance action failed.', 'error');
+      showToast(err?.message || 'Attendance action failed.', 'error');
     } finally {
       setIsClockingIn(false);
     }
@@ -436,7 +431,7 @@ export default function EmployeeDashboardPage() {
                     </span>
                   </div>
                 </div>
-
+                                    <WfhStatusBadge record={todayAttendance} />
                 <button
                   onClick={handleAttendanceClockToggle}
                   disabled={isClockingIn || isAttendanceComplete}

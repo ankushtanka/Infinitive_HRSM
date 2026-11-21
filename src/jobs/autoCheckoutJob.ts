@@ -6,6 +6,7 @@ import {
   calculateWorkingHours,
 } from '@/lib/dateUtils';
 import { loadAttendanceRules } from '@/lib/geo';
+import { processRejectedWfhAbsences } from '@/lib/wfh';
 
 export interface AutoCheckoutResult {
   success: boolean;
@@ -176,6 +177,14 @@ export function startAutoCheckoutCronJob(): ScheduledTask {
         console.log(`[AutoCheckout] Finished daily job: ${result.message}`);
       } catch (error) {
         console.error('[AutoCheckout] Unhandled error during midnight cron job:', error);
+      }
+            // Rejected WFH days that are over: interns who did not come to the office get the internship extended
+      try {
+        const { db } = await connectToDatabase();
+        const wfh = await processRejectedWfhAbsences(db, { today: getISTDateString(new Date()) });
+        console.log(`[WFH] Rejected WFH days checked: ${wfh.checked}, internships extended: ${wfh.extended}`);
+      } catch (wfhError) {
+        console.error('[WFH] Rejected WFH day check failed:', wfhError);
       }
     },
     {

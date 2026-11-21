@@ -40,6 +40,7 @@ import {
 import { useAuthStore } from '@/store/authStore';
 import { formatRoleLabel } from '@/lib/roleUtils';
 import { getCurrentPositionOnce } from '@/lib/clientGeo';
+import { openCheckInDialog, openCheckOutDialog } from '@/components/attendance/checkInDialog';
 import AddTeamMemberModal from '@/components/manager/AddTeamMemberModal';
 import TeamMemberProfileModal from '@/components/manager/TeamMemberProfileModal';
 import { OfficeMapModal } from '@/components/modals/OfficeMapModal';
@@ -315,38 +316,31 @@ export default function ManagerDashboardPage() {
   }, [fetchDashboardData]);
 
   // Handle Manager Self Check-In / Check-Out
-  const handleManagerClock = async (action: 'CLOCK_IN' | 'CLOCK_OUT') => {
+    const handleManagerClock = async (action: 'CLOCK_IN' | 'CLOCK_OUT') => {
     setIsClocking(true);
     try {
-      const geo = await getCurrentPositionOnce(6000);
-      const res = await fetch('/api/v1/attendance', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, ...(geo ? { geo } : {}) }),
-      });
-      const resData = await res.json();
-      if (resData.success) {
-        showToast(
-          action === 'CLOCK_IN'
-            ? 'Checked in successfully. Shift attendance marked.'
-            : 'Checked out successfully. Shift finished.'
-        );
+      // Check In asks "Office or Work From Home" and checks the location; Check Out sends the location for the record
+      const result = action === 'CLOCK_IN' ? await openCheckInDialog() : await openCheckOutDialog();
+      if (!result) return; // dialog closed
+      if (result.success) {
         if (action === 'CLOCK_IN') {
           fetch('/api/v1/tracking/start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ consent: true, ...(geo ? { geo } : {}) }),
+            body: JSON.stringify({ consent: true }),
           }).catch(() => {});
         } else {
           fetch('/api/v1/tracking/stop', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ...(geo ? { geo } : {}) }),
+            body: JSON.stringify({}),
           }).catch(() => {});
         }
-        fetchDashboardData(true);
+        // Refresh first: the refresh shows its own toast, and the check-in message (e.g. Late / WFH pending) must stay visible
+        await fetchDashboardData(true);
+        showToast(result.message);
       } else {
-        showToast(resData.message || 'Failed to record attendance.', 'error');
+        showToast(result.message || 'Failed to record attendance.', 'error');
       }
     } catch (err: any) {
       showToast(err.message || 'Error recording attendance.', 'error');
